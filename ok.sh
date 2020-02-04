@@ -544,7 +544,10 @@ _get_mime_type() {
         *.tar) mime_type=application/x-tar ;;
         *.txt) mime_type=text/plain ;;
         *.yaml) mime_type=application/x-yaml ;;
+        *.apk) mime_type=application/vnd.android.package-archive ;;
         *.zip) mime_type=application/zip ;;
+        *.jar) mime_type=application/java-archive ;;
+        *.war) mime_type=application/zip ;;
     esac
 
     _log debug "Guessed mime type of '${mime_type}' for '${filename}'."
@@ -756,17 +759,30 @@ _response() {
     local hdr
     local val
     local http_version
-    local status_code
+    local status_code=100
     local status_text
     local headers output
 
     _log debug 'Processing response.'
 
-    read -r http_version status_code status_text
-    status_text="${status_text%${crlf}}"
-    http_version="${http_version#HTTP/}"
+    while [ "${status_code}" = "100" ]; do
+        read -r http_version status_code status_text
+        status_text="${status_text%${crlf}}"
+        http_version="${http_version#HTTP/}"
 
-    _log debug "Response status is: ${status_code} ${status_text}"
+        _log debug "Response status is: ${status_code} ${status_text}"
+
+        if [ "${status_code}" = "100" ]; then
+            _log debug "Ignoring response '${status_code} ${status_text}', skipping to real response."
+            while IFS=": " read -r hdr val; do
+                # Headers stop at the first blank line.
+                [ "$hdr" = "$crlf" ] && break
+                val="${val%${crlf}}"
+                _log debug "Unexpected additional header: ${hdr}: ${val}"
+            done
+
+        fi
+    done
 
     headers="http_version: ${http_version}
 status_code: ${status_code}
@@ -1327,6 +1343,93 @@ list_hooks() {
     _get "${url}" | _filter_json "${_filter}"
 }
 
+list_gists() {
+    # List gists for the current authenticated user or a specific user
+    #
+    # https://developer.github.com/v3/gists/#list-a-users-gists
+    #
+    # Usage:
+    #
+    #     list_gists
+    #     list_gists <username>
+    #
+    # Positional arguments
+    #
+    local username="$1"
+    #   An optional user to filter listing
+    #
+    # Keyword arguments
+    #
+    local _follow_next
+    #   Automatically look for a 'Links' header and follow any 'next' URLs.
+    local _follow_next_limit
+    #   Maximum number of 'next' URLs to follow before stopping.
+    local _filter='.[] | "\(.id)\t\(.description)"'
+    #   A jq filter to apply to the return data.
+
+    local url
+    case "$username" in
+        ('') url='/gists';;
+        (*=*) url='/gists';;
+        (*) url="/users/${username}/gists"; shift 1;;
+    esac
+
+    _opts_pagination "$@"
+    _opts_filter "$@"
+
+    _get "${url}" | _filter_json "${_filter}"
+}
+
+public_gists() {
+    # List public gists
+    #
+    # https://developer.github.com/v3/gists/#list-all-public-gists
+    #
+    # Usage:
+    #
+    #     public_gists
+    #
+    # Keyword arguments
+    #
+    local _follow_next
+    #   Automatically look for a 'Links' header and follow any 'next' URLs.
+    local _follow_next_limit
+    #   Maximum number of 'next' URLs to follow before stopping.
+    local _filter='.[] | "\(.id)\t\(.description)"'
+    #   A jq filter to apply to the return data.
+
+    _opts_pagination "$@"
+    _opts_filter "$@"
+
+    _get '/gists/public' | _filter_json "${_filter}"
+}
+
+gist() {
+    # Get a single gist
+    #
+    # https://developer.github.com/v3/gists/#get-a-single-gist
+    #
+    # Usage:
+    #
+    #     get_gist
+    #
+    # Positional arguments
+    #
+    local gist_id="${1:?Gist ID required.}"
+    #   ID of gist to fetch.
+    #
+    # Keyword arguments
+    #
+    local _filter='.files | keys | join(", ")'
+    #   A jq filter to apply to the return data.
+
+    shift 1
+
+    _opts_filter "$@"
+
+    _get "/gists/${gist_id}" | _filter_json "${_filter}"
+}
+
 add_collaborator() {
     # Add a collaborator to a repository
     #
@@ -1508,6 +1611,8 @@ fork_repo() {
 list_releases() {
     # List releases for a repository
     #
+    # https://developer.github.com/v3/repos/releases/#list-releases-for-a-repository
+    #
     # Usage:
     #
     #     list_releases org repo '\(.assets[0].name)\t\(.name.id)'
@@ -1534,6 +1639,8 @@ list_releases() {
 
 release() {
     # Get a release
+    #
+    # https://developer.github.com/v3/repos/releases/#get-a-single-release
     #
     # Usage:
     #
@@ -1563,6 +1670,8 @@ release() {
 
 create_release() {
     # Create a release
+    #
+    # https://developer.github.com/v3/repos/releases/#create-a-release
     #
     # Usage:
     #
@@ -1600,8 +1709,52 @@ create_release() {
         | _filter_json "${_filter}"
 }
 
+edit_release() {
+    # Edit a release
+    #
+    # https://developer.github.com/v3/repos/releases/#edit-a-release
+    #
+    # Usage:
+    #
+    #     edit_release org repo 1087855 name='Foo Bar 1.4.6'
+    #     edit_release user repo 1087855 draft=false
+    #
+    # Positional arguments
+    #
+    local owner="${1:?Owner name required.}"
+    #   A GitHub user or organization.
+    local repo="${2:?Repo name required.}"
+    #   A GitHub repository.
+    local release_id="${3:?Release ID required.}"
+    #   The unique ID of the release; see list_releases.
+    #
+    # Keyword arguments
+    #
+    local _filter='"\(.tag_name)\t\(.name)\t\(.html_url)"'
+    #   A jq filter to apply to the return data.
+    #
+    # POST data may also be passed as keyword arguments:
+    #
+    # * `tag_name`
+    # * `body`
+    # * `draft`
+    # * `name`
+    # * `prerelease`
+    # * `target_commitish`
+
+    shift 3
+
+    _opts_filter "$@"
+
+    _format_json "$@" \
+        | _post "/repos/${owner}/${repo}/releases/${release_id}" method="PATCH" \
+        | _filter_json "${_filter}"
+}
+
 delete_release() {
     # Delete a release
+    #
+    # https://developer.github.com/v3/repos/releases/#delete-a-release
     #
     # Usage:
     #
@@ -1632,9 +1785,30 @@ delete_release() {
 release_assets() {
     # List release assets
     #
+    # https://developer.github.com/v3/repos/releases/#list-assets-for-a-release
+    #
     # Usage:
     #
     #     release_assets user repo 1087855
+    #
+    # Example of downloading release assets:
+    #
+    #     ok.sh release_assets <user> <repo> <release_id> \
+    #             _filter='.[] | .browser_download_url' \
+    #         | xargs -L1 curl -L -O
+    #
+    # Example of the multi-step process for grabbing the release ID for
+    # a specific version, then grabbing the release asset IDs, and then
+    # downloading all the release assets (whew!):
+    #
+    #     username='myuser'
+    #     repo='myrepo'
+    #     release_tag='v1.2.3'
+    #     ok.sh list_releases "$myuser" "$myrepo" \
+    #         | awk -F'\t' -v tag="$release_tag" '$2 == tag { print $3 }' \
+    #         | xargs -I{} ./ok.sh release_assets "$myuser" "$myrepo" {} \
+    #             _filter='.[] | .browser_download_url' \
+    #         | xargs -L1 curl -n -L -O
     #
     # Positional arguments
     #
@@ -1660,6 +1834,8 @@ release_assets() {
 
 upload_asset() {
     # Upload a release asset
+    #
+    # https://developer.github.com/v3/repos/releases/#upload-a-release-asset
     #
     # Usage:
     #
@@ -2099,6 +2275,30 @@ list_orgs() {
     _opts_qs "$@"
 
     _get "/organizations" | _filter_json "$_filter"
+}
+
+list_users() {
+    # List all users
+    #
+    # Usage:
+    #
+    #     list_users
+    #
+    # Keyword arguments
+    #
+    local _follow_next
+    #   Automatically look for a 'Links' header and follow any 'next' URLs.
+    local _follow_next_limit
+    #   Maximum number of 'next' URLs to follow before stopping.
+    local _filter='.[] | "\(.login)\t\(.id)"'
+    #   A jq filter to apply to the return data.
+
+    local qs
+
+    _opts_pagination "$@"
+    _opts_filter "$@"
+    _opts_qs "$@"
+    _get "/users" | _filter_json "$_filter"
 }
 
 labels() {

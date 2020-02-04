@@ -113,6 +113,9 @@ Flags _must_ be the first argument to `ok.sh`, before `command`.
 * [list_contributors](#list_contributors)
 * [list_collaborators](#list_collaborators)
 * [list_hooks](#list_hooks)
+* [list_gists](#list_gists)
+* [public_gists](#public_gists)
+* [gist](#gist)
 * [add_collaborator](#add_collaborator)
 * [delete_collaborator](#delete_collaborator)
 * [create_repo](#create_repo)
@@ -121,6 +124,7 @@ Flags _must_ be the first argument to `ok.sh`, before `command`.
 * [list_releases](#list_releases)
 * [release](#release)
 * [create_release](#create_release)
+* [edit_release](#edit_release)
 * [delete_release](#delete_release)
 * [release_assets](#release_assets)
 * [upload_asset](#upload_asset)
@@ -775,6 +779,79 @@ Positional arguments
   A jq filter to apply to the return data.
 
 
+### list_gists
+
+List gists for the current authenticated user or a specific user
+
+https://developer.github.com/v3/gists/#list-a-users-gists
+
+Usage:
+
+    list_gists
+    list_gists <username>
+
+Positional arguments
+
+* `username="$1"`
+
+  An optional user to filter listing
+
+Keyword arguments
+
+* `_follow_next`
+
+  Automatically look for a 'Links' header and follow any 'next' URLs.
+* `_follow_next_limit`
+
+  Maximum number of 'next' URLs to follow before stopping.
+* `_filter='.[] | "\(.id)\t\(.description)"'`
+
+  A jq filter to apply to the return data.
+
+### public_gists
+
+List public gists
+
+https://developer.github.com/v3/gists/#list-all-public-gists
+
+Usage:
+
+    public_gists
+
+Keyword arguments
+
+* `_follow_next`
+
+  Automatically look for a 'Links' header and follow any 'next' URLs.
+* `_follow_next_limit`
+
+  Maximum number of 'next' URLs to follow before stopping.
+* `_filter='.[] | "\(.id)\t\(.description)"'`
+
+  A jq filter to apply to the return data.
+
+### gist
+
+Get a single gist
+
+https://developer.github.com/v3/gists/#get-a-single-gist
+
+Usage:
+
+    get_gist
+
+Positional arguments
+
+* `gist_id="$1"`
+
+  ID of gist to fetch.
+
+Keyword arguments
+
+* `_filter='.files | keys | join(", ")'`
+
+  A jq filter to apply to the return data.
+
 ### add_collaborator
 
 Add a collaborator to a repository
@@ -907,6 +984,8 @@ POST data may also be passed as keyword arguments:
 
 List releases for a repository
 
+https://developer.github.com/v3/repos/releases/#list-releases-for-a-repository
+
 Usage:
 
     list_releases org repo '\(.assets[0].name)\t\(.name.id)'
@@ -929,6 +1008,8 @@ Keyword arguments
 ### release
 
 Get a release
+
+https://developer.github.com/v3/repos/releases/#get-a-single-release
 
 Usage:
 
@@ -955,6 +1036,8 @@ Keyword arguments
 ### create_release
 
 Create a release
+
+https://developer.github.com/v3/repos/releases/#create-a-release
 
 Usage:
 
@@ -987,9 +1070,49 @@ POST data may also be passed as keyword arguments:
 * `prerelease`
 * `target_commitish`
 
+### edit_release
+
+Edit a release
+
+https://developer.github.com/v3/repos/releases/#edit-a-release
+
+Usage:
+
+    edit_release org repo 1087855 name='Foo Bar 1.4.6'
+    edit_release user repo 1087855 draft=false
+
+Positional arguments
+
+* `owner="$1"`
+
+  A GitHub user or organization.
+* `repo="$2"`
+
+  A GitHub repository.
+* `release_id="$3"`
+
+  The unique ID of the release; see list_releases.
+
+Keyword arguments
+
+* `_filter='"\(.tag_name)\t\(.name)\t\(.html_url)"'`
+
+  A jq filter to apply to the return data.
+
+POST data may also be passed as keyword arguments:
+
+* `tag_name`
+* `body`
+* `draft`
+* `name`
+* `prerelease`
+* `target_commitish`
+
 ### delete_release
 
 Delete a release
+
+https://developer.github.com/v3/repos/releases/#delete-a-release
 
 Usage:
 
@@ -1013,9 +1136,30 @@ Positional arguments
 
 List release assets
 
+https://developer.github.com/v3/repos/releases/#list-assets-for-a-release
+
 Usage:
 
     release_assets user repo 1087855
+
+Example of downloading release assets:
+
+    ok.sh release_assets <user> <repo> <release_id> \
+            _filter='.[] | .browser_download_url' \
+        | xargs -L1 curl -L -O
+
+Example of the multi-step process for grabbing the release ID for
+a specific version, then grabbing the release asset IDs, and then
+downloading all the release assets (whew!):
+
+    username='myuser'
+    repo='myrepo'
+    release_tag='v1.2.3'
+    ok.sh list_releases "$myuser" "$myrepo" \
+        | awk -F'\t' -v tag="$release_tag" '$2 == tag { print $3 }' \
+        | xargs -I{} ./ok.sh release_assets "$myuser" "$myrepo" {} \
+            _filter='.[] | .browser_download_url' \
+        | xargs -L1 curl -n -L -O
 
 Positional arguments
 
@@ -1038,6 +1182,8 @@ Keyword arguments
 ### upload_asset
 
 Upload a release asset
+
+https://developer.github.com/v3/repos/releases/#upload-a-release-asset
 
 Usage:
 
